@@ -161,8 +161,8 @@ void correct_line(char* line, char*corrected_line)
 
 		if (*(colon_index1 + 1) != ' ' || *(colon_index1 + 1) != '\t') // make sure there is at least one whitespaces after ':'  
 		{
-			*(colon_index1 + 1) = ' ';                                               ////æä êà ãåøñ àú îä ùäéä ùí ìôğé ??????..
-			char* colon_index2 = strchr(line, ':');                                 //////åîä æä ?
+			*(colon_index1 + 1) = ' ';                                               ////Ã¦Ã¤ ÃªÃ  Ã£Ã¥Ã¸Ã± Ã Ãº Ã®Ã¤ Ã¹Ã¤Ã©Ã¤ Ã¹Ã­ Ã¬Ã´Ã°Ã© ??????..
+			char* colon_index2 = strchr(line, ':');                                 //////Ã¥Ã®Ã¤ Ã¦Ã¤ ?
 
 			strcpy(colon_index1 + 2, colon_index2 + 1);
 		}
