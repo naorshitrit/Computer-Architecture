@@ -6,19 +6,26 @@
 #define TRUE 1 
 #define FALSE 0
 
+
 #define MAX_LINES 4096 
-#define SIZE 9 //included the "/0" sign
+#define SIZE 9 //included the "/0" sign. had to be checked maybe its 8 ????????????
 #define LINE_SIZE 8
 #define REG_NUM 16
 #define IOREG_NUM 18
 #define LEDS 32
+#define MAX_WORD_LENGTH_HW 15
+#define HW_COLS 4
+#define lEDS_COLS 2
+ 
+
 /*Utility func*/
 int getHex(char* source);
 int hex2int(char ch);
 int getAddress(int address);
 /*Create func*/
 void createTrace(FILE* trace, int pc, char line[SIZE], int* reg[REG_NUM], int* count);
-void createLastFiles(FILE* memout, char memory_out[MAX_LINES][SIZE], int max_line_counter, FILE* regout, int* reg[REG_NUM], FILE* count, int counter);
+void createLastFiles(FILE* memout, char memory_out[MAX_LINES][SIZE], int max_line_counter, FILE* regout, int* reg[REG_NUM], FILE* cycles, int total_cycles, int max_line_hw, FILE* hwregtraceF, char *** hw_matrix,
+	FILE* ledsF, int** Leds_matrix, int max_line_leds, FILE* displayF, int** display_matrix, int max_line_display);
 
 /*Line Func*/
 void add(int rd, int rs, int rt, int* reg[REG_NUM]);
@@ -35,18 +42,26 @@ void lw(int rd, int rs, int* reg[REG_NUM], char memory_out[MAX_LINES][SIZE], int
 void sw(int rd, int rs, int* reg[REG_NUM], char memory_in[MAX_LINES][LINE_SIZE], char memory_out[MAX_LINES][SIZE], int pc, int *max_line_counter);
 void halt(int* pc);
 void decipher_line(char line[SIZE], int* reg[REG_NUM], char memory_in[MAX_LINES][LINE_SIZE], char memory_out[MAX_LINES][SIZE], int* pc, int *max_line_counter_ptr);
-
-
+void irq_update(int irq0Status, int irq1Status, int irq2Status, int irq0Enable, int irq1Enable, int irq2Enable, int irqhandler, int *pc);
+void irq1_helper(int disk_stating_pc, long clks, int *diskCmd, int diskStatus, int irq1status, int *irq1Enable, int diskbuffer, char** memoryout, FILE* diskOut);
 
 
 int main(int argc, const char* argv[])
 {
+	char hw_matrix[MAX_LINES][HW_COLS][MAX_WORD_LENGTH_HW]; //hwregtrace matrix
+	int leds_matrix[MAX_LINES][lEDS_COLS]; // leds matrix
+	int display_matrix[MAX_LINES][lEDS_COLS];// display matrix
+	char memory_in[MAX_LINES][LINE_SIZE], memory_out[MAX_LINES][SIZE], disk_out_matrix[MAX_LINES][LINE_SIZE];
+	int max_line_disk_out = 0; int irq0enable = 0; int irq1enable = 0; int irq2enable = 0; int irq0status = 0; int irq1status = 0; int irq2status = 0;
+	int irqhandler = 0; int irqreturn = 0; long clks = 0; int leds[32]; int* display[8]; int timerenable = 0;
+	long timercurrent = 0; int timermax = 0; int diskcmd = 0; int disksector = 0; int diskbuffer = 0; int diskstatus = 0; int disk_starting_pc = 0;
+	int disk_stating_pc; int total_cycles = 0; int max_line_hw = 0; int max_line_leds = 0; int max_line_display = 0;
 	if (argc < 12)
 	{
 		printf("Arg Amount Error");
 		return 0;
 	}
-	FILE* memin, *diskin, *irq2in, *memout, *regout, *trace, *hwregtrace, *cycles, *leds, *display, *diskout;
+	FILE* memin, *diskin, *irq2in, *memout, *regout, *trace, *hwregtrace, *cycles, *ledsF, *displayF, *diskout;
 	memin = fopen(argv[1], "r");
 	diskin = fopen(argv[2], "r");
 	irq2in = fopen(argv[3], "r");
@@ -55,8 +70,8 @@ int main(int argc, const char* argv[])
 	trace = fopen(argv[6], "w");
 	hwregtrace = fopen(argv[7], "w");
 	cycles = fopen(argv[8], "w");
-	leds = fopen(argv[9], "w");
-	display = fopen(argv[10], "w");
+	ledsF = fopen(argv[9], "w");
+	displayF = fopen(argv[10], "w");
 	diskout = fopen(argv[11], "w");
 
 	if (memin == NULL || diskin == NULL || irq2in == NULL || memout == NULL || regout == NULL || trace == NULL || hwregtrace == NULL || cycles == NULL || leds == NULL || display == NULL || diskout == NULL)
@@ -69,23 +84,17 @@ int main(int argc, const char* argv[])
 	int *max_line_counter_ptr = &max_line_counter;
 	int reg_b[REG_NUM] = { 0 };
 	int* reg[REG_NUM];
+	
 	int* IOreg[IOREG_NUM];
 	int leds[LEDS];
-	
 	//register number assignments
 	for (int i = 0; i < REG_NUM ; i++)
 	{
 		reg[i] = &reg_b[i];
 	}
-	for (int i = 0; i < IOREG_NUM; i++)
-	{
-		IOreg[i] = 0;
-	}
-	IOreg[9] = leds;
 	
-
 	
-	char memory_in[MAX_LINES][LINE_SIZE], memory_out[MAX_LINES][SIZE];//????
+	clone_matrix(disk_out_matrix, diskin, &max_line_disk_out);
 	int* counter = &cnt; int* pcp = &pc;
 
 	while (!feof(memin))//memory_in and memory_out are filled
@@ -98,27 +107,50 @@ int main(int argc, const char* argv[])
 	}
 	fclose(memin);
 
+
 	while (pc > -1)
-	{
+	{	
+		irq1_helper(disk_starting_pc, clks, &diskcmd, diskbuffer, diskstatus, &irq1enable,diskbuffer, memory_out, &diskout);
+		irq_update(irq0status, irq1status, irq2status, irq0enable, irq1enable, irq2enable, irqhandler, &pc);
 		char line[SIZE];
 		snprintf(line, SIZE, "%s%c", memory_in[pc], '\0');
 		printf("%s", line);
 		createTrace(trace, pc, line, reg, counter);
 		printf(" %d\n", *counter);
 		decipher_line(line, reg, memory_in, memory_out, pcp, max_line_counter_ptr);
-
+		pc_loop(&clks);// clock increment
+		total_cycles += 1;
+		
 	}
 	//Exit:	
 	fclose(trace);
-	createLastFiles(memout, memory_out, max_line_counter, regout, reg, count, *counter);
+	createLastFiles(memout, memory_out, max_line_counter, regout, reg, &cycles, total_cycles, max_line_hw, &hwregtrace, hw_matrix, &ledsF, leds_matrix, max_line_leds, &displayF, display_matrix, max_line_display);
 	fclose(memout);
 	fclose(regout);
-	fclose(count);
+	fclose(cycles);
 }
 
 
 
 /*Utility Func*/
+
+// initiazling the content of file"diskin" to matrix disk_out_matrixs
+void clone_matrix(char ** disk_out_matrix, FILE* disk_in, int* max_line_disk_out) {
+	int max_line_disk_out = 0;
+	while (!feof(disk_in))//memory_in and memory_out are filled
+	{
+		int check;
+		if (check = fscanf(disk_in, "%s", disk_out_matrix[*max_line_disk_out]) != 0) { //Consider \n in fscanf and avoid using memout because probably there are changes to the code line pheraps there should be. filling the matrix of memory_in.
+			max_line_disk_out++;
+		}
+	}
+}
+void pc_loop(int *clks) {
+	if (*clks == 4294967295) { // convert of 0xFFFFFFFF
+		*clks = 0;
+	}
+	else (*clks)++;
+	}
 int getHex(char* source)
 {
 	int n = (int)strtol(source, NULL, 16);
@@ -155,22 +187,81 @@ int getAddress(int address)
 	return address;
 }
 
+/*
+ 1.updates the irq1status and irq1enable.
+ 2.checking if 1024 clock cycles have pass - if yes execute the read/write operation
+ 
+*/
+void irq1_helper(int disk_stating_pc, long clks, int *diskCmd, int diskStatus,int irq1status, int *irq1Enable,int diskbuffer,char** memoryout, FILE* diskOut) {
+
+}
+/*
+ 1.updates the irq0status and irq0enable.
+ 2.updates the irq2status and irq2enable.
+ 3.For the timer case(irq0) update the timer respectively (if timerEnable = 1)
+*/
+void irq02_status_update(int* irq0Status, int* irq1Status, int* irq2Status, int irq0Enable, int irq1Enable, int irq2Enable, int[] irq2arr, int clock) {
+		
+}
+/*
+1. return array contain the pc's(addresses) values of external interrupts in those addresses(irq2 type)
+*/
+int* irq2_array(FILE* irq2in) {
+
+}
+
+void irq_update(int irq0Status, int irq1Status, int irq2Status, int irq0Enable, int irq1Enable, int irq2Enable, int irqhandler, int *pc) {
+	int res;
+	res=((irq0Enable & irq0Status) | (irq1Enable & irq1Status) | (irq2Enable & irq2Status));
+	if (res != 0) {
+		*pc = irqhandler;
+	}
+}
+
 
 /*Create Func*/
-void createLastFiles(FILE* memout, char memory_out[MAX_LINES][SIZE], int max_line_counter, FILE* regout, int* reg[REG_NUM], FILE* count, int counter)
+/*
+  Updating hwregrtace matrix (and more anf more)
+*/
+void createLastFiles(FILE* memout, char memory_out[MAX_LINES][SIZE], int max_line_counter, FILE* regout, int* reg[REG_NUM], FILE* cycles, int total_cycles, int max_line_hw, FILE* hwregtraceF, char *** hw_matrix,
+FILE* ledsF, int** Leds_matrix, int max_line_leds, FILE* displayF, int** display_matrix, int max_line_display, int max_line_disk_out, FILE* disk_out, char disk_out_matrix[MAX_LINES][SIZE])
 {
 	for (int i = 0; i < REG_NUM; i++)
 	{
-		fprintf(regout, "%04X\n", *reg[i]);
+		fprintf(regout, "%08X\n", *reg[i]);
 	}
 	for (int i = 0; i < max_line_counter; i++)
 	{
 		int instruction = getHex(memory_out[i]);
 		if (instruction < 0)
-			instruction -= 0xFFFF0000;
-		fprintf(memout, "%04X\n", instruction);
+			instruction -= 0xFFFFFFFF00000000;
+		fprintf(memout, "%08X\n", instruction);
 	}
-	fprintf(count, "%d\n", counter);
+	fprintf(cycles, "%d\n", total_cycles);
+	//hwregtrace matrix loading
+	for (int i = 0; i < max_line_hw; i++){
+		fprintf(hwregtraceF, "%s %s %s %s %s\n", hw_matrix[i][0], hw_matrix[i][1], hw_matrix[i][2], hw_matrix[i][3]);
+	}
+	//leds matrix update
+	for (int i = 0; i < max_line_leds; i++){
+		fprintf(ledsF, "%d %08X\n", Leds_matrix[0], Leds_matrix[1]);
+	}
+	// display matrix update
+	for (int i = 0; i < max_line_leds; i++) {
+		fprintf(displayF, "%d %08X\n", display_matrix[0], display_matrix[1]);
+	}
+	// updates into diskout file the matrix 'disk-out-matrix'
+	for (int i = 0; i < max_line_disk_out; i++)
+	{
+		fprintf(disk_out, "%08X\n", disk_out_matrix[i]);
+	}
+	
+
+
+
+
+
+
 }
 void createTrace(FILE* trace, int pc, char line[SIZE], int* reg[REG_NUM], int* count)
 {
@@ -190,10 +281,12 @@ void createTrace(FILE* trace, int pc, char line[SIZE], int* reg[REG_NUM], int* c
 /*LINE Func*/
 void decipher_line(char line[SIZE], int* reg[REG_NUM], char memory_in[MAX_LINES][LINE_SIZE], char memory_out[MAX_LINES][SIZE], int* pc, int* max_line_counter_ptr) {
 
-	int opcode = hex2int(line[0]);
-	int rd = hex2int(line[1]);
-	int rs = hex2int(line[2]);
-	int rt = hex2int(line[3]);//where is the immediate??????????
+	int opcode = hex2int(line[0]) * 16 + hex2int(line[1]);
+	int rd = hex2int(line[2]);
+	int rs = hex2int(line[3]);
+	int rt = hex2int(line[4]);
+	*reg[1] = hex2int(line[5]) * 16 * 16 + hex2int(line[6]) * 16 + hex2int(line[7]); // immediate update
+	
 	/*if (opcode == 20) //.word
 	{
 		halt(pc);
@@ -280,6 +373,20 @@ void ble(int rd, int rs, int rt, char memory_in[MAX_LINES][LINE_SIZE], int* reg[
 void bge(int rd, int rs, int rt, char memory_in[MAX_LINES][LINE_SIZE], int* reg[REG_NUM], int* pc) {
 
 }
+/*
+######################## IN AND OUT #####################################
+1. It is necessary to check diskStatus and update the values accordingly. 
+2. Update IORegisters
+3. Update hwregtrace matrix(Strings) + max_line_hw
+4. Update the lEDS matrix 
+5.while updating mem-out, we have to increment by 1 the variable "max_line_disk_out"
+###############################Naor Ashtar the(my) monkey###########################
+*/
+
+void in(int rd, int rs, int rt, char memory_in[MAX_LINES][LINE_SIZE], int* reg[REG_NUM], int* pc, int* max_line_hw) {
+
+}
+
 /*void branch(int rd, int rs, int rt, char memory_in[MAX_LINES][LINE_SIZE], int* reg[REG_NUM], int* pc)
 {
 	char line[SIZE];
