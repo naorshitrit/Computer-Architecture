@@ -18,8 +18,16 @@
 #define lEDS_COLS 2
  
 
-/*Utility func*/
+/*Utility func
+ * /
 int getHex(char* source);
+
+
+changing!!!!
+
+
+
+
 int hex2int(char ch);
 int getAddress(int address);
 /*Create func*/
